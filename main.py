@@ -1,58 +1,66 @@
-from bounding_boxes import *
-from generate_masks import * 
-from diffusers import StableDiffusionInpaintPipeline
-from PIL import Image
+import cv2
+from do_all import *
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Load the model
-detector = OwlVit()
-mask_generator = SAM_mask_generator()
+# Open the input video
+input_video_path = "/mnt/keremaydin/that-is-not-a-gun/polat_alemdar.mp4"
+cap = cv2.VideoCapture(input_video_path)
 
-# Load the image
-image = Image.open('/mnt/keremaydin/that-is-not-a-gun/gun_image.jpg')
+# Get the total number of frames
+num_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-# Text prompt
-text_prompt = ['a photo of a gun']
+# Get video properties
+fps = cap.get(cv2.CAP_PROP_FPS)
+frame_width = 1024
+frame_height = 1024
 
-# Inference
-results = detector.detect(image, text_prompt)
-
-# View the result
-bboxes = detector.show_boxes_and_labels(image, results, text_prompt)
-
-# Generate masks
-masks = mask_generator.generate_mask(image, results, bboxes[0], text_prompt)
-
-# Obtain only a single mask
-image_mask = torch.zeros(masks[0].shape)
-
-for mask in masks:
-    image_mask = torch.add(image_mask, mask)
-
-# Initialize Stable Diffusion 
-sd_pipe = StableDiffusionInpaintPipeline.from_pretrained(
-        "./models/stabilityai/stable-diffusion-2-inpainting",
-        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.bfloat16,
-        low_cpu_mem_usage=False if torch.cuda.is_available() else True,
-    ).to(device)
-
-# Set the value of seed manually for reproducibility of the results
-seed = 66733
-generator = torch.Generator(device).manual_seed(seed)
-
-prompt = "a banana in the shape of gun"
-
-output = sd_pipe(
-  image=image,
-  mask_image=image_mask,
-  prompt=prompt,
-  generator=generator,
-  num_inference_steps=3,
+replace_func = ReplaceAll(
+    device=device,
+    will_replace=['pistol', 'gun', 'pistol in hand', 'gun in hand'],
+    replace_with='orange carrot in hand'
 )
 
-generated_image = output.images[0]
+# Define output video writer
+output_video_path = "/mnt/keremaydin/that-is-not-a-gun/final_video.mp4"
+out = cv2.VideoWriter(output_video_path, 
+                      cv2.VideoWriter_fourcc(*'mp4v'), 
+                      fps, 
+                      (frame_width, frame_height))
 
-generated_image = generated_image.save("/mnt/keremaydin/that-is-not-a-gun/gun_replaced_with_banana.jpg")
+frame_num = 0
 
-print(masks)
+# Process each frame
+while True:
+
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    print(f'{frame_num+1}/{num_frames}')
+
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    frame_reshaped = cv2.resize(frame_rgb, (1024, 1024))
+
+    frame_pil = Image.fromarray(frame_reshaped)
+
+    # Perform erosion on the frame
+    new_frame = replace_func.replace(frame_pil)
+
+    # Convert it into np array
+    new_frame_np = np.array(new_frame)
+
+    # Convert RGB to BGR
+    bgr_image = cv2.cvtColor(new_frame_np, cv2.COLOR_RGB2BGR)
+
+    # Write the eroded frame to the output video
+    out.write(bgr_image)
+
+    frame_num += 1
+
+# Release resources
+cap.release()
+out.release()
+
+
